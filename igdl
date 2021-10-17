@@ -1,0 +1,72 @@
+#!/bin/bash
+
+cd "$(dirname "$0")"
+path=`realpath "$PWD"`
+urltemp=igdownload$$.tmp
+trap 'rm -f "$urltemp";sleep 0.3' 0 1 2 15
+
+chmod u+rwx "$path" || exit 1
+for dir in logs download; do
+	[ -d "$path/$dir" ] || mkdir "$path/$dir" || exit 1
+done
+
+exec 2<>"$path/logs/error.log" 1> >(tee -a "$path/logs/output.txt")
+
+# Media url finder
+geturl() {
+	for url in $@; do
+		while read -r string; do
+			str=`x=${string##*http://}; echo ${x##*https://}`
+			echo "${str%%'"'*}"|sed 's/\\\u0026/\&/g'|grep -v '<\|>\|{\|}'|grep -v 'instagram.com/p' >> "$urltemp"
+			[ "$str" ] || break
+		done < <(curl -Lk "$url"|grep 'http\|https')
+	done
+}
+
+# Send console help message
+show_help() {
+	echo "Usage: $0 [url]"
+	echo
+	echo "Examples of supported instagram urls:"
+	echo "  - https://instagram.com/p/*"
+	echo "  - https://www.instagram.com/p/*"
+}
+
+url=
+if [ $# = 0 ]; then
+	show_help
+	exit 1
+elif [ $# -gt 1 ]; then
+	for i in $@; do
+		case "$i" in
+			http://*instagram.com/p/*|https://*instagram.com/p/*) url="$url '$i'";;
+			h|help|-h|--help) show_help; exit;;
+			*) echo "Usage: ${0##*} help for more informations"; exit 1
+		esac
+	done
+	eval set -- "$url"
+fi
+
+echo "[*] Splitting and select instagram media urls..."
+geturl "$@"
+
+for mlink in `cat "$urltemp"`; do
+	tempname="$path/download/.tmp"
+	echo "[*] Downloading at: $mlink..."
+	curl --location --insecure  "$mlink" --output "$tempname"
+	type=`x=$(file -b "$tempname" --mime-type); echo ${x##*/}`
+
+	case "$type" in 
+		html|plain|stream) continue;;
+		jpeg) type=jpg;;
+		mpeg) type=mp4;;
+		x-icon) type=ico;;
+	esac
+	sha256=`sha256sum "$tempname"|cut -d' ' -f1`
+	media_name="$path/download/$sha256.$type"
+
+	mv "$tempname" "$media_name"
+	echo "Saved in: $media_name"
+	[ "$(command -v xdg-open)" ] && xdg-open "$media_name"
+done
+echo
